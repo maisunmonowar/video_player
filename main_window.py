@@ -1,17 +1,32 @@
 import sys
 import os
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QSlider, QFileDialog, QStyle, QLabel,
-    QInputDialog
+    QInputDialog, QSizePolicy, QGraphicsView, QGraphicsScene
 )
-from PyQt6.QtCore import Qt, QUrl, QTimer, pyqtSignal, QThread, QObject
+from PyQt6.QtCore import Qt, QUrl, QTimer, pyqtSignal, QThread, QObject, QSizeF
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 from audio_extractor import AudioExtractor
 from transcriber import Transcriber
 from translator import Translator
+
+class VideoGraphicsView(QGraphicsView):
+    def __init__(self):
+        super().__init__()
+        self.video_item = QGraphicsVideoItem()
+        self.setScene(QGraphicsScene(self))
+        self.scene().addItem(self.video_item)
+        self.setStyleSheet("background-color: black; border: none;")
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.scene().setSceneRect(0, 0, self.viewport().width(), self.viewport().height())
+        self.video_item.setSize(QSizeF(self.viewport().width(), self.viewport().height()))
 
 class ProcessingWorker(QThread):
     finished = pyqtSignal(list, list) # original_segments, translated_segments
@@ -55,30 +70,41 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
 
+        # Video Container for Layout Overlays
+        self.video_container = QWidget(self)
+        self.video_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        # We use a QGridLayout to place labels on strictly top of video
+        # by sharing the same grid space.
+        self.overlay_layout = QGridLayout(self.video_container)
+        self.overlay_layout.setContentsMargins(0, 0, 0, 0)
+        self.overlay_layout.setRowStretch(0, 1)
+        self.overlay_layout.setColumnStretch(0, 1)
+
         # Video Player and Video Widget
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.media_player.setAudioOutput(self.audio_output)
         
-        self.video_widget = QVideoWidget(self)
-        self.media_player.setVideoOutput(self.video_widget)
+        self.video_widget = VideoGraphicsView()
+        self.media_player.setVideoOutput(self.video_widget.video_item)
 
-        # Layout for Video Overlay (Subtitles)
-        self.video_layout = QVBoxLayout(self.video_widget)
-        self.video_layout.setContentsMargins(0, 20, 0, 20)
-        
-        # Subtitle Labels
-        self.top_subtitle_label = QLabel("", self.video_widget)
+        # Subtitle Labels (No parent passed explicitly to let layout handle it)
+        self.top_subtitle_label = QLabel("")
         self.top_subtitle_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.top_subtitle_label.setStyleSheet("color: white; font-size: 24px; font-weight: bold; background-color: rgba(0, 0, 0, 150); padding: 5px;")
+        self.top_subtitle_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.top_subtitle_label.setWordWrap(True)
         
-        self.bottom_subtitle_label = QLabel("", self.video_widget)
+        self.bottom_subtitle_label = QLabel("")
         self.bottom_subtitle_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
         self.bottom_subtitle_label.setStyleSheet("color: yellow; font-size: 20px; font-weight: bold; background-color: rgba(0, 0, 0, 150); padding: 5px;")
+        self.bottom_subtitle_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.bottom_subtitle_label.setWordWrap(True)
 
-        self.video_layout.addWidget(self.top_subtitle_label)
-        self.video_layout.addStretch()
-        self.video_layout.addWidget(self.bottom_subtitle_label)
+        self.overlay_layout.addWidget(self.video_widget, 0, 0)
+        self.overlay_layout.addWidget(self.top_subtitle_label, 0, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.overlay_layout.addWidget(self.bottom_subtitle_label, 0, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
 
         # Controls
         self.play_button = QPushButton()
@@ -103,7 +129,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.position_slider)
 
         main_layout = QVBoxLayout()
-        main_layout.addWidget(self.video_widget)
+        main_layout.addWidget(self.video_container)
         main_layout.addWidget(self.status_label)
         main_layout.addLayout(control_layout)
 
@@ -185,6 +211,7 @@ class MainWindow(QMainWindow):
                 current_orig = seg["text"]
                 break
         self.bottom_subtitle_label.setText(current_orig)
+        self.bottom_subtitle_label.raise_()
         
         # Update translated subtitle (top)
         current_trans = ""
@@ -193,4 +220,5 @@ class MainWindow(QMainWindow):
                 current_trans = seg["text"]
                 break
         self.top_subtitle_label.setText(current_trans)
+        self.top_subtitle_label.raise_()
 
